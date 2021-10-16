@@ -1,6 +1,9 @@
 ﻿#include <math.h>
-#include <ostream>
-
+#include <string>
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <assert.h>
 
 #define     GLH_ZERO                double(0.0)
 #define     GLH_EPSILON          double(10e-6)
@@ -28,8 +31,6 @@ inline bool isEqual(double a, double b, double tol = GLH_EPSILON)
 #ifndef M_PI
 #define M_PI 3.14159f
 #endif
-
-#include <assert.h>
 
 class vec3f {
 public:
@@ -75,6 +76,13 @@ public:
 		x += v.x;
 		y += v.y;
 		z += v.z;
+		return *this;
+	}
+
+	inline vec3f &operator = (const vec3f &v) {
+		x = v.x;
+		y = v.y;
+		z = v.z;
 		return *this;
 	}
 
@@ -382,4 +390,64 @@ tri_contact(vec3f &P1, vec3f &P2, vec3f &P3, vec3f &Q1, vec3f &Q2, vec3f &Q3)
 	if (!project6(h3, p1, p2, p3, q1, q2, q3)) return false;
 
 	return true;
+}
+
+using namespace std;
+
+int readObj(string objPath, int& vNum, int& fNum){
+	ifstream infile(objPath);
+	if(!infile.is_open()){
+		return -1;
+	}
+	string line;
+	vNum = 0;
+	fNum = 0;
+	while(getline(infile, line)){
+		if(line[0] == 'v' && line[1] == ' '){
+			++vNum; 
+		}
+		else if(line[0] == 'f' && line[1] == ' '){
+			++fNum;
+		}
+	}
+	vec3f* point = new vec3f[vNum];
+	vec3f* face = new vec3f[fNum];
+	infile.close();
+	infile.open(objPath);
+	if(!infile.is_open()){
+		return -1;
+	}
+	int vNumIndex = 0, fNUmIndex = 0;
+	string str;
+	double d[3];
+	while(getline(infile, line)){
+		if(line[0] == 'v' && line[1] == ' '){
+			istringstream instr(line);
+			instr >> str >> d[0] >> d[1] >> d[2];
+			// cout << str << " " << d1 << " " << d2 << " " << d3 << endl;
+			point[vNumIndex].set_value(d[0], d[1], d[2]);
+			++vNumIndex; 
+		}
+		else if(line[0] == 'f' && line[1] == ' '){
+			istringstream instr(line);
+			instr >> str;
+			for(int i = 0; i < 3; ++i){
+				instr >> str;
+				d[i] = atof(str.c_str());
+				cout << d[i] << endl;
+			}
+			face[fNUmIndex].set_value(d[0], d[1], d[2]);
+			++fNUmIndex;
+		}
+	}
+	infile.close();
+	delete[] point;
+	delete[] face;
+	return 0;
+}
+
+int main(){
+	int vNum, fNum;
+	readObj("flag-2000-changed.obj", vNum, fNum);
+	return 0;
 }
