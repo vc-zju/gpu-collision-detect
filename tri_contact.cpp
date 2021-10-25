@@ -394,7 +394,15 @@ tri_contact(vec3f &P1, vec3f &P2, vec3f &P3, vec3f &Q1, vec3f &Q2, vec3f &Q3)
 
 using namespace std;
 
-int readObj(string objPath, int& vNum, int& fNum){
+struct faceValue
+{
+	vec3f* points1;
+	vec3f* points2;
+	vec3f* points3;
+};
+
+
+int readObj(string objPath, int& vNum, int& fNum, faceValue* faces){
 	ifstream infile(objPath);
 	if(!infile.is_open()){
 		return -1;
@@ -412,6 +420,9 @@ int readObj(string objPath, int& vNum, int& fNum){
 	}
 	vec3f* point = new vec3f[vNum];
 	vec3f* face = new vec3f[fNum];
+	faces->points1 = new vec3f[fNum];
+	faces->points2 = new vec3f[fNum];
+	faces->points3 = new vec3f[fNum];
 	infile.close();
 	infile.open(objPath);
 	if(!infile.is_open()){
@@ -434,13 +445,17 @@ int readObj(string objPath, int& vNum, int& fNum){
 			for(int i = 0; i < 3; ++i){
 				instr >> str;
 				d[i] = atof(str.c_str());
-				cout << d[i] << endl;
 			}
 			face[fNUmIndex].set_value(d[0], d[1], d[2]);
 			++fNUmIndex;
 		}
 	}
 	infile.close();
+	for(int i = 0; i < fNum; ++i){
+		faces->points1[i] = point[static_cast<int>(face[i].x)];
+		faces->points2[i] = point[static_cast<int>(face[i].y)];
+		faces->points3[i] = point[static_cast<int>(face[i].z)];
+	}
 	delete[] point;
 	delete[] face;
 	return 0;
@@ -448,6 +463,24 @@ int readObj(string objPath, int& vNum, int& fNum){
 
 int main(){
 	int vNum, fNum;
-	readObj("flag-2000-changed.obj", vNum, fNum);
+	faceValue* faces = new faceValue;
+	int res = readObj("flag-2000-changed.obj", vNum, fNum, faces);
+	cout << vNum << " " << fNum << endl;
+	if(res){
+		cout << "read obj failed" << endl;
+	}
+	int collisionNum = 0;
+	for(int i = 0; i < fNum; ++i){
+		for(int j = i + 1; j < fNum; ++j){
+			if(tri_contact(faces->points1[i], faces->points2[i], faces->points3[i], faces->points1[j], faces->points2[j], faces->points3[j])){
+				++collisionNum;
+				cout << "#self contact found at (" << i << "," << j << ")" << endl;
+			}
+		}
+	}
+	delete[] faces->points1;
+	delete[] faces->points2;
+	delete[] faces->points3;
+	delete faces;
 	return 0;
 }

@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "*.txt": "makefile",
+        "xstring": "cpp",
+        "iostream": "cpp"
+    }
+}
