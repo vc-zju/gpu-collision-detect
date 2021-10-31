@@ -333,6 +333,11 @@ inline int project6(vec3f &ax,
 
 bool tri_contact(vec3f &P1, vec3f &P2, vec3f &P3, vec3f &Q1, vec3f &Q2, vec3f &Q3)
 {
+	if((P1.equal_abs(Q1) || P1.equal_abs(Q2) || P1.equal_abs(Q3) ||\
+		P2.equal_abs(Q1) || P2.equal_abs(Q2) || P2.equal_abs(Q3) ||\
+		P3.equal_abs(Q1) || P3.equal_abs(Q2) || P3.equal_abs(Q3))){
+		return false;
+	}
 	vec3f p1;
 	vec3f p2 = P2 - P1;
 	vec3f p3 = P3 - P1;

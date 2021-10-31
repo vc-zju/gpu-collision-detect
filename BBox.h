@@ -8,18 +8,9 @@ struct BBox final
 { 
     vec3f min;
     vec3f max;
+    BBox():min(-1, -1, -1), max(-1, -1, -1){}
     BBox(const vec3f& min, const vec3f& max): min(min), max(max){}
-    BBox(const triFace& face, int faceIndex);
     BBox& merge(const BBox& box); 
-};
-
-BBox::BBox(const triFace& face, const int& faceIndex){
-    min.x = fmin(face.points1[faceIndex].x, face.points2[faceIndex].x, face.points3[faceIndex].x);
-    min.y = fmin(face.points1[faceIndex].y, face.points2[faceIndex].y, face.points3[faceIndex].y);
-    min.z = fmin(face.points1[faceIndex].z, face.points2[faceIndex].z, face.points3[faceIndex].z);
-    max.x = fmax(face.points1[faceIndex].x, face.points2[faceIndex].x, face.points3[faceIndex].x);
-    max.y = fmax(face.points1[faceIndex].y, face.points2[faceIndex].y, face.points3[faceIndex].y);
-    max.z = fmax(face.points1[faceIndex].z, face.points2[faceIndex].z, face.points3[faceIndex].z);
 };
 
 inline BBox& BBox::merge(const BBox& box){
@@ -40,3 +31,20 @@ inline bool box_contact(const BBox& box1, const BBox& box2){
     }
     return false;
 }
+
+inline BBox box_merge(BBox box1, const BBox& box2){
+    vmin(box1.min, box2.min);
+    vmax(box1.max, box2.max);
+    return box1;
+}
+
+BBox getBox(const triFace& face, const int& faceIndex){
+    vec3f min ,max;
+    min.x = fmin(face.points1[faceIndex].x, face.points2[faceIndex].x, face.points3[faceIndex].x);
+    min.y = fmin(face.points1[faceIndex].y, face.points2[faceIndex].y, face.points3[faceIndex].y);
+    min.z = fmin(face.points1[faceIndex].z, face.points2[faceIndex].z, face.points3[faceIndex].z);
+    max.x = fmax(face.points1[faceIndex].x, face.points2[faceIndex].x, face.points3[faceIndex].x);
+    max.y = fmax(face.points1[faceIndex].y, face.points2[faceIndex].y, face.points3[faceIndex].y);
+    max.z = fmax(face.points1[faceIndex].z, face.points2[faceIndex].z, face.points3[faceIndex].z);
+    return BBox(min, max);
+};
