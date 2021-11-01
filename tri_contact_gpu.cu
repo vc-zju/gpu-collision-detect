@@ -1,15 +1,23 @@
 ﻿#include <stdlib.h>
 #include <time.h>
-#include <omp.h>
+#include <stdio.h>
 
-#include "vec3f.h"
-#include "BBox.h"
-#include "triFace.h"
-#include "Node.h"
-#include "build.h"
+#include "vec3f_gpu.h"
+#include "BBox_gpu.h"
+#include "triFace_gpu.h"
+#include "Node_gpu.h"
+#include "build_gpu.h"
 
 using namespace std;
-static int resultPosition;
+
+cudaError_t gCudaStatus;
+
+#define CUDA_CHECK_CALL(fun, err_msg, return_code)					\
+	gCudaStatus = fun;												\
+	if(gCudaStatus != cudaSuccess){									\
+		printf("error_code%d: %s", gCudaStatus, err_msg);			\
+		return return_code;											\
+	}
 
 int readObj(string objPath, int& vNum, int& fNum, triFace* faces, vec3f& min, vec3f& max){
 	ifstream infile(objPath);
@@ -80,7 +88,6 @@ int readObj(string objPath, int& vNum, int& fNum, triFace* faces, vec3f& min, ve
 		}
 	}
 	infile.close();
-	#pragma omp parallel for
 	for(int i = 0; i < fNum; ++i){
 		faces->points1[i] = point[static_cast<int>(face[i].x) - 1];
 		faces->points2[i] = point[static_cast<int>(face[i].y) - 1];
@@ -100,7 +107,6 @@ int compare(const void* a, const void* b){
 Node* buildBVH(triFace* faces, const int& fNum, const vec3f& min, const vec3f& max){
 	vec3f extend = max - min;
 	sorted* sortedCodeAndID = new sorted[fNum];
-	#pragma omp parallel for
 	for(int i = 0; i < fNum; ++i){
 		sortedCodeAndID[i].sortedMortonCode = morton3D((faces->gravityPoints[i].x - min.x) / extend.x,\
 													   (faces->gravityPoints[i].y - min.y) / extend.y,\
@@ -113,23 +119,38 @@ Node* buildBVH(triFace* faces, const int& fNum, const vec3f& min, const vec3f& m
 	return root;
 }
 
-void traverseBVH(triFace* faces, const int& queryNum, Node* root){
-	const BBox& box = faces->box[queryNum];
+__device__ void traverseBVHGPU(vec3f* points1, vec3f* points2, vec3f* points3, BBox* bbox, const int& queryNum, Node* root){
+	const BBox& box = bbox[queryNum];
 	if(box_contact(box, *(root->getNodeBox()))){
 		if(root->isLeaf()){
 			int index = root->getIndex();
-			if(queryNum < index && tri_contact(faces->points1[queryNum], faces->points2[queryNum], faces->points3[queryNum], 
-						   faces->points1[index], faces->points2[index], faces->points3[index])){
-				cout << queryNum << " " << index << endl;
+			if(queryNum < index && tri_contact(points1[queryNum], points2[queryNum], points3[queryNum], 
+						   points1[index], points2[index], points3[index])){
+				printf("%d %d\n", queryNum, index);
 			}
 		}
 		else{
 			Node* leftChild = root->leftChild;
 			Node* rightChild = root->rightChild;
-			traverseBVH(faces, queryNum, leftChild);
-			traverseBVH(faces, queryNum, rightChild);
+			traverseBVHGPU(points1, points2, points3, bbox, queryNum, leftChild);
+			traverseBVHGPU(points1, points2, points3, bbox, queryNum, rightChild);
 		}
 	}
+}
+
+__global__ void traverseBVH(triFace* faces, Node* root, int fNum){
+	int i = threadIdx.x + blockIdx.x * blockDim.x;
+	if(i < fNum){
+		traverseBVHGPU(faces->points1, faces->points2, faces->points3, faces->box, i, root);
+	}
+}
+
+__global__ void allocateOnDevice(triFace** faces){
+	
+}
+
+__global__ void freeOnDevice(triFace* faces, Node** root){
+	
 }
 
 int main(){
@@ -146,17 +167,32 @@ int main(){
 	}
 	end = clock();
 	printf("read time=%fms\n",(double)(end-start) * 1000 /CLK_TCK);
+	triFace* facesGPU = new triFace;
+	// CUDA_CHECK_CALL(cudaMalloc((void**)&(facesGPU), sizeof(triFace)), "cudaMalloc failed!\n", -2);
+	CUDA_CHECK_CALL(cudaMalloc((void**)&(facesGPU->points1), fNum  * sizeof(vec3f)), "cudaMalloc failed!\n", -2);
+	CUDA_CHECK_CALL(cudaMalloc((void**)&(facesGPU->points2), fNum  * sizeof(vec3f)), "cudaMalloc failed!\n", -2);
+	CUDA_CHECK_CALL(cudaMalloc((void**)&(facesGPU->points3), fNum  * sizeof(vec3f)), "cudaMalloc failed!\n", -2);
+	CUDA_CHECK_CALL(cudaMalloc((void**)&(facesGPU->gravityPoints), fNum  * sizeof(vec3f)), "cudaMalloc failed!\n", -2);
+	CUDA_CHECK_CALL(cudaMalloc((void**)&(facesGPU->box), fNum  * sizeof(BBox)), "cudaMalloc failed!\n", -2);
+	CUDA_CHECK_CALL(cudaMemcpy(facesGPU->points1, faces->points1, fNum  * sizeof(vec3f), cudaMemcpyHostToDevice), "cudaMemcpy points1 failed!\n", -2);
+	CUDA_CHECK_CALL(cudaMemcpy(facesGPU->points2, faces->points2, fNum  * sizeof(vec3f), cudaMemcpyHostToDevice), "cudaMemcpy points2 failed!\n", -2);
+	CUDA_CHECK_CALL(cudaMemcpy(facesGPU->points3, faces->points3, fNum  * sizeof(vec3f), cudaMemcpyHostToDevice), "cudaMemcpy points3 failed!\n", -2);
+	CUDA_CHECK_CALL(cudaMemcpy(facesGPU->gravityPoints, faces->gravityPoints, fNum  * sizeof(vec3f), cudaMemcpyHostToDevice), "cudaMemcpy gravityPoints failed!\n", -2);
+	CUDA_CHECK_CALL(cudaMemcpy(facesGPU->box, faces->box, fNum  * sizeof(BBox), cudaMemcpyHostToDevice), "cudaMemcpy box failed!\n", -2);
 	start = clock();
 	root = buildBVH(faces, fNum, min, max);
 	end = clock();
 	printf("build time=%fms\n",(double)(end-start) * 1000 /CLK_TCK);
 	start = clock();
-	#pragma omp parallel for
-	for(int i = 0; i < fNum; ++i){
-		traverseBVH(faces, i, root);
-	}
+	traverseBVH<<<(fNum + 1023) / 1024, 1024>>>(facesGPU, root, fNum);
 	end = clock();
 	printf("traverse time=%fms\n",(double)(end-start) * 1000 /CLK_TCK);
+	cudaFree(facesGPU->points1);
+	cudaFree(facesGPU->points2);
+	cudaFree(facesGPU->points3);
+	cudaFree(facesGPU->gravityPoints);
+	cudaFree(facesGPU->box);
+	delete facesGPU;
 	/*vec3f point11, point12, point13, point21, point22, point23;
 	int collisionNum = 0;
 	for(int i = 120914; i < fNum; ++i){

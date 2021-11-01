@@ -1,5 +1,5 @@
 #pragma once
-#include "BBox.h"
+#include "BBox_gpu.h"
 
 
 struct Node{
