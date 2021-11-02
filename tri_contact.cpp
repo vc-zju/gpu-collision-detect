@@ -9,7 +9,7 @@
 #include "build.h"
 
 using namespace std;
-static int resultPosition;
+static int collisionNum = 0;
 
 int readObj(string objPath, int& vNum, int& fNum, triFace* faces, vec3f& min, vec3f& max){
 	ifstream infile(objPath);
@@ -108,7 +108,8 @@ Node* buildBVH(triFace* faces, const int& fNum, const vec3f& min, const vec3f& m
 		sortedCodeAndID[i].sortedObjectID = i;
 	}
 	qsort(sortedCodeAndID, fNum, sizeof(sorted), compare);
-	Node* root = generateHierarchy(faces, sortedCodeAndID, 0, fNum - 1);
+	// Node* root = generateHierarchy(faces, sortedCodeAndID, 0, fNum - 1);
+	Node* root = generateHierarchy(faces, sortedCodeAndID, fNum);
 	delete[] sortedCodeAndID;
 	return root;
 }
@@ -116,8 +117,10 @@ Node* buildBVH(triFace* faces, const int& fNum, const vec3f& min, const vec3f& m
 void traverseBVH(triFace* faces, const int& queryNum, Node* root){
 	const BBox& box = faces->box[queryNum];
 	if(box_contact(box, *(root->getNodeBox()))){
+		++collisionNum;
 		if(root->isLeaf()){
 			int index = root->getIndex();
+			// cout << queryNum << " " << index << endl;
 			if(queryNum < index && tri_contact(faces->points1[queryNum], faces->points2[queryNum], faces->points3[queryNum], 
 						   faces->points1[index], faces->points2[index], faces->points3[index])){
 				cout << queryNum << " " << index << endl;
@@ -141,6 +144,7 @@ int main(){
 	Node* root;
 	start = clock();
 	int res = readObj("flag-2000-changed.obj", vNum, fNum, faces, min, max);
+	// cout << vNum << " " << fNum << endl;
 	if(res){
 		cout << "read obj failed" << endl;
 	}
@@ -155,6 +159,7 @@ int main(){
 	for(int i = 0; i < fNum; ++i){
 		traverseBVH(faces, i, root);
 	}
+	cout << collisionNum << endl;
 	end = clock();
 	printf("traverse time=%fms\n",(double)(end-start) * 1000 /CLK_TCK);
 	/*vec3f point11, point12, point13, point21, point22, point23;

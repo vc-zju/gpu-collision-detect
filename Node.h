@@ -1,5 +1,5 @@
 #pragma once
-#include "BBox_gpu.h"
+#include "BBox.h"
 
 
 struct Node{
@@ -9,11 +9,13 @@ struct Node{
     virtual bool isInternal() = 0;
     virtual BBox* getNodeBox() = 0;
     virtual int getIndex() = 0;
+    virtual ~Node(){if(leftChild) free(leftChild); if(rightChild) free(rightChild);}
     Node* leftChild;
     Node* rightChild;
 };
 
 struct LeafNode: public Node{
+    LeafNode():index(-1){}
     LeafNode(int sortedObjectID, const BBox& box):index(sortedObjectID), box(box){}
     bool isLeaf() {return true;}
     bool isInternal() {return false;}
@@ -24,6 +26,7 @@ struct LeafNode: public Node{
 };
 
 struct InternalNode: public Node{
+    InternalNode():start(-1), end(-1){}
     InternalNode(Node* leftChild, Node* rightChild, int start, int end):Node(leftChild, rightChild), start(start), end(end){
         box = box_merge(*(leftChild->getNodeBox()), *(rightChild->getNodeBox()));
     }

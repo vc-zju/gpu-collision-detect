@@ -10,7 +10,7 @@ struct sorted{
 
 // Expands a 10-bit integer into 30 bits
 // by inserting 2 zeros after each bit.
-unsigned int expandBits(unsigned int v)
+__host__ __device__ unsigned int expandBits(unsigned int v)
 {
     v = (v * 0x00010001u) & 0xFF0000FFu;
     v = (v * 0x00000101u) & 0x0F00F00Fu;
@@ -21,7 +21,7 @@ unsigned int expandBits(unsigned int v)
 
 // Calculates a 30-bit Morton code for the
 // given 3D point located within the unit cube [0,1].
-unsigned int morton3D(double x, double y, double z)
+__host__ __device__ unsigned int morton3D(double x, double y, double z)
 {
     x = min(max(x * 1024.0, 0.0), 1023.0);
     y = min(max(y * 1024.0, 0.0), 1023.0);
@@ -32,7 +32,7 @@ unsigned int morton3D(double x, double y, double z)
     return xx * 4 + yy * 2 + zz;
 }
 
-int clz(unsigned int code){
+__host__ __device__ int clz(unsigned int code){
     int zeroNum = 0;
     unsigned int pattern = 0x80000000;
     for(int i = 0; i < 32; ++i){
@@ -47,7 +47,7 @@ int clz(unsigned int code){
     return zeroNum;
 }
 
-int findSplit( sorted*       sortedCodeAndID,
+__host__ __device__ int findSplit( sorted*       sortedCodeAndID,
                int           first,
                int           last)
 {
@@ -90,15 +90,16 @@ int findSplit( sorted*       sortedCodeAndID,
     return split;
 }
 
-Node* generateHierarchy( triFace*      faces,
+__host__ __device__ Node* generateHierarchy( BBox*      box,
                          sorted*       sortedCodeAndID,
                          int           first,
                          int           last)
 {
     // Single object => create a leaf node.
-
-    if (first == last)
-        return new LeafNode(sortedCodeAndID[first].sortedObjectID, faces->box[sortedCodeAndID[first].sortedObjectID]);
+    if (first == last){
+        return new LeafNode(sortedCodeAndID[first].sortedObjectID, box[sortedCodeAndID[first].sortedObjectID]);
+    }
+        
 
     // Determine where to split the range.
 
@@ -106,15 +107,60 @@ Node* generateHierarchy( triFace*      faces,
 
     // Process the resulting sub-ranges recursively.
 
-    Node* childA = generateHierarchy(faces, sortedCodeAndID,
+    Node* childA = generateHierarchy(box, sortedCodeAndID,
                                      first, split);
-    Node* childB = generateHierarchy(faces, sortedCodeAndID,
+    Node* childB = generateHierarchy(box, sortedCodeAndID,
                                      split + 1, last);
     return new InternalNode(childA, childB, first, last);
 }
 
-/*Node* generateHierarchy( unsigned int* sortedMortonCodes,
-                         int*          sortedObjectIDs,
+__host__ __device__ inline int sign(int num){
+    if(num >= 0){
+        return 1;
+    }
+    else if(num < 0){
+        return -1;
+    }
+}
+
+__host__ __device__ inline int clzMorton(sorted* sortedCodeAndID, int numObjects, int idx1, int idx2){
+    if(idx2 >= 0 && idx2 <= numObjects - 1){
+        if(((sortedCodeAndID[idx1].sortedMortonCode) ^ (sortedCodeAndID[idx2].sortedMortonCode)) == 0){
+            return (32 + clz(idx1 ^ idx2));
+        }
+        else
+            return clz((sortedCodeAndID[idx1].sortedMortonCode) ^ (sortedCodeAndID[idx2].sortedMortonCode));
+    }  
+    else
+        return -1;
+}
+
+__host__ __device__ void determineRange(sorted* sortedCodeAndID, int numObjects, int idx, int* first, int* last){
+    int d = sign(clzMorton(sortedCodeAndID, numObjects, idx, idx + 1) - clzMorton(sortedCodeAndID, numObjects, idx, idx - 1));
+    int dMin = clzMorton(sortedCodeAndID, numObjects, idx, idx - d);
+    int bound = 2;
+    while(clzMorton(sortedCodeAndID, numObjects, idx, idx + d * bound) > dMin){
+        bound *= 2;
+    }
+    int boundAnother = 0;
+    for(int t = bound / 2; t >= 1; t /= 2){
+        if(clzMorton(sortedCodeAndID, numObjects, idx, idx + (boundAnother + t) * d) > dMin){
+            boundAnother = boundAnother + t;
+        }
+    }
+    int j = idx + boundAnother * d;
+    if(d > 0){
+        *last = j;
+        *first = idx;
+    }
+    else{
+        *last = idx;
+        *first = j;
+    }
+}
+
+__host__ __device__ Node* generateHierarchy( BBox*      box,
+                         sorted*       sortedCodeAndID,
                          int           numObjects)
 {
     LeafNode* leafNodes = new LeafNode[numObjects];
@@ -124,8 +170,11 @@ Node* generateHierarchy( triFace*      faces,
     // Note: This step can be avoided by storing
     // the tree in a slightly different way.
 
-    for (int idx = 0; idx < numObjects; idx++) // in parallel
-        leafNodes[idx].objectID = sortedObjectIDs[idx];
+    for (int idx = 0; idx < numObjects; idx++){     // in parallel
+        leafNodes[idx].index = sortedCodeAndID[idx].sortedObjectID;
+        leafNodes[idx].box = box[sortedCodeAndID[idx].sortedObjectID];
+    } 
+        
 
     // Construct internal nodes.
 
@@ -133,14 +182,11 @@ Node* generateHierarchy( triFace*      faces,
     {
         // Find out which range of objects the node corresponds to.
         // (This is where the magic happens!)
-
-        int2 range = determineRange(sortedMortonCodes, numObjects, idx);
-        int first = range.x;
-        int last = range.y;
-
+        int first, last;
+        determineRange(sortedCodeAndID, numObjects, idx, &first, &last);
         // Determine where to split the range.
 
-        int split = findSplit(sortedMortonCodes, first, last);
+        int split = findSplit(sortedCodeAndID, first, last);
 
         // Select childA.
 
@@ -160,14 +206,15 @@ Node* generateHierarchy( triFace*      faces,
 
         // Record parent-child relationships.
 
-        internalNodes[idx].childA = childA;
-        internalNodes[idx].childB = childB;
-        childA->parent = &internalNodes[idx];
-        childB->parent = &internalNodes[idx];
+        internalNodes[idx].leftChild = childA;
+        internalNodes[idx].rightChild = childB;
+        internalNodes[idx].box = leafNodes[first].box; 
+        for(int i = first + 1; i <= last; ++i){
+            internalNodes[idx].box = box_merge(internalNodes[idx].box, leafNodes[i].box);
+        }
     }
 
     // Node 0 is the root.
-
     return &internalNodes[0];
-}*/
+}
 

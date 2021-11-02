@@ -103,7 +103,6 @@ Node* generateHierarchy( triFace*      faces,
     // Determine where to split the range.
 
     int split = findSplit(sortedCodeAndID, first, last);
-
     // Process the resulting sub-ranges recursively.
 
     Node* childA = generateHierarchy(faces, sortedCodeAndID,
@@ -113,8 +112,53 @@ Node* generateHierarchy( triFace*      faces,
     return new InternalNode(childA, childB, first, last);
 }
 
-/*Node* generateHierarchy( unsigned int* sortedMortonCodes,
-                         int*          sortedObjectIDs,
+inline int sign(int num){
+    if(num >= 0){
+        return 1;
+    }
+    else if(num < 0){
+        return -1;
+    }
+}
+
+inline int clzMorton(sorted* sortedCodeAndID, int numObjects, int idx1, int idx2){
+    if(idx2 >= 0 && idx2 <= numObjects - 1){
+        if(((sortedCodeAndID[idx1].sortedMortonCode) ^ (sortedCodeAndID[idx2].sortedMortonCode)) == 0){
+            return (32 + clz(idx1 ^ idx2));
+        }
+        else
+            return clz((sortedCodeAndID[idx1].sortedMortonCode) ^ (sortedCodeAndID[idx2].sortedMortonCode));
+    }  
+    else
+        return -1;
+}
+
+void determineRange(sorted* sortedCodeAndID, int numObjects, int idx, int* first, int* last){
+    int d = sign(clzMorton(sortedCodeAndID, numObjects, idx, idx + 1) - clzMorton(sortedCodeAndID, numObjects, idx, idx - 1));
+    int dMin = clzMorton(sortedCodeAndID, numObjects, idx, idx - d);
+    int bound = 2;
+    while(clzMorton(sortedCodeAndID, numObjects, idx, idx + d * bound) > dMin){
+        bound *= 2;
+    }
+    int boundAnother = 0;
+    for(int t = bound / 2; t >= 1; t /= 2){
+        if(clzMorton(sortedCodeAndID, numObjects, idx, idx + (boundAnother + t) * d) > dMin){
+            boundAnother = boundAnother + t;
+        }
+    }
+    int j = idx + boundAnother * d;
+    if(d > 0){
+        *last = j;
+        *first = idx;
+    }
+    else{
+        *last = idx;
+        *first = j;
+    }
+}
+
+Node* generateHierarchy( triFace*      faces,
+                         sorted*       sortedCodeAndID,
                          int           numObjects)
 {
     LeafNode* leafNodes = new LeafNode[numObjects];
@@ -124,8 +168,11 @@ Node* generateHierarchy( triFace*      faces,
     // Note: This step can be avoided by storing
     // the tree in a slightly different way.
 
-    for (int idx = 0; idx < numObjects; idx++) // in parallel
-        leafNodes[idx].objectID = sortedObjectIDs[idx];
+    for (int idx = 0; idx < numObjects; idx++){     // in parallel
+        leafNodes[idx].index = sortedCodeAndID[idx].sortedObjectID;
+        leafNodes[idx].box = faces->box[sortedCodeAndID[idx].sortedObjectID];
+    } 
+        
 
     // Construct internal nodes.
 
@@ -133,14 +180,11 @@ Node* generateHierarchy( triFace*      faces,
     {
         // Find out which range of objects the node corresponds to.
         // (This is where the magic happens!)
-
-        int2 range = determineRange(sortedMortonCodes, numObjects, idx);
-        int first = range.x;
-        int last = range.y;
-
+        int first, last;
+        determineRange(sortedCodeAndID, numObjects, idx, &first, &last);
         // Determine where to split the range.
 
-        int split = findSplit(sortedMortonCodes, first, last);
+        int split = findSplit(sortedCodeAndID, first, last);
 
         // Select childA.
 
@@ -160,14 +204,15 @@ Node* generateHierarchy( triFace*      faces,
 
         // Record parent-child relationships.
 
-        internalNodes[idx].childA = childA;
-        internalNodes[idx].childB = childB;
-        childA->parent = &internalNodes[idx];
-        childB->parent = &internalNodes[idx];
+        internalNodes[idx].leftChild = childA;
+        internalNodes[idx].rightChild = childB;
+        internalNodes[idx].box = leafNodes[first].box; 
+        for(int i = first + 1; i <= last; ++i){
+            internalNodes[idx].box = box_merge(internalNodes[idx].box, leafNodes[i].box);
+        }
     }
 
     // Node 0 is the root.
-
     return &internalNodes[0];
-}*/
+}
 
