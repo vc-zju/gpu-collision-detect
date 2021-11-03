@@ -167,7 +167,7 @@ Node* generateHierarchy( triFace*      faces,
     // Construct leaf nodes.
     // Note: This step can be avoided by storing
     // the tree in a slightly different way.
-
+    #pragma omp parallel for
     for (int idx = 0; idx < numObjects; idx++){     // in parallel
         leafNodes[idx].index = sortedCodeAndID[idx].sortedObjectID;
         leafNodes[idx].box = faces->box[sortedCodeAndID[idx].sortedObjectID];
@@ -175,7 +175,7 @@ Node* generateHierarchy( triFace*      faces,
         
 
     // Construct internal nodes.
-
+    #pragma omp parallel for
     for (int idx = 0; idx < numObjects - 1; idx++) // in parallel
     {
         // Find out which range of objects the node corresponds to.

@@ -47,14 +47,14 @@ __host__ __device__ int clz(unsigned int code){
     return zeroNum;
 }
 
-__host__ __device__ int findSplit( sorted*       sortedCodeAndID,
+__device__ int findSplit( unsigned int* sortedMortonCode,
                int           first,
                int           last)
 {
     // Identical Morton codes => split the range in the middle.
 
-    unsigned int firstCode = sortedCodeAndID[first].sortedMortonCode;
-    unsigned int lastCode = sortedCodeAndID[last].sortedMortonCode;
+    unsigned int firstCode = sortedMortonCode[first];
+    unsigned int lastCode = sortedMortonCode[last];
 
     if (firstCode == lastCode)
         return (first + last) >> 1;
@@ -63,7 +63,7 @@ __host__ __device__ int findSplit( sorted*       sortedCodeAndID,
     // for all objects, using the count-leading-zeros intrinsic.
 
     //int commonPrefix = __clz(firstCode ^ lastCode);
-    int commonPrefix = clz(firstCode ^ lastCode);
+    int commonPrefix = __clz(firstCode ^ lastCode);
 
     // Use binary search to find where the next bit differs.
     // Specifically, we are looking for the highest object that
@@ -79,8 +79,8 @@ __host__ __device__ int findSplit( sorted*       sortedCodeAndID,
 
         if (newSplit < last)
         {
-            unsigned int splitCode = sortedCodeAndID[newSplit].sortedMortonCode;
-            int splitPrefix = clz(firstCode ^ splitCode);
+            unsigned int splitCode = sortedMortonCode[newSplit];
+            int splitPrefix = __clz(firstCode ^ splitCode);
             if (splitPrefix > commonPrefix)
                 split = newSplit; // accept proposal
         }
@@ -90,7 +90,7 @@ __host__ __device__ int findSplit( sorted*       sortedCodeAndID,
     return split;
 }
 
-__host__ __device__ Node* generateHierarchy( BBox*      box,
+/*__host__ __device__ Node* generateHierarchy( BBox*      box,
                          sorted*       sortedCodeAndID,
                          int           first,
                          int           last)
@@ -112,7 +112,7 @@ __host__ __device__ Node* generateHierarchy( BBox*      box,
     Node* childB = generateHierarchy(box, sortedCodeAndID,
                                      split + 1, last);
     return new InternalNode(childA, childB, first, last);
-}
+}*/
 
 __host__ __device__ inline int sign(int num){
     if(num >= 0){
@@ -123,28 +123,28 @@ __host__ __device__ inline int sign(int num){
     }
 }
 
-__host__ __device__ inline int clzMorton(sorted* sortedCodeAndID, int numObjects, int idx1, int idx2){
+__device__ inline int clzMorton(unsigned int* sortedMortonCode, int numObjects, int idx1, int idx2){
     if(idx2 >= 0 && idx2 <= numObjects - 1){
-        if(((sortedCodeAndID[idx1].sortedMortonCode) ^ (sortedCodeAndID[idx2].sortedMortonCode)) == 0){
-            return (32 + clz(idx1 ^ idx2));
+        if(((sortedMortonCode[idx1]) ^ (sortedMortonCode[idx2])) == 0){
+            return (32 + __clz(idx1 ^ idx2));
         }
         else
-            return clz((sortedCodeAndID[idx1].sortedMortonCode) ^ (sortedCodeAndID[idx2].sortedMortonCode));
+            return __clz((sortedMortonCode[idx1]) ^ (sortedMortonCode[idx2]));
     }  
     else
         return -1;
 }
 
-__host__ __device__ void determineRange(sorted* sortedCodeAndID, int numObjects, int idx, int* first, int* last){
-    int d = sign(clzMorton(sortedCodeAndID, numObjects, idx, idx + 1) - clzMorton(sortedCodeAndID, numObjects, idx, idx - 1));
-    int dMin = clzMorton(sortedCodeAndID, numObjects, idx, idx - d);
+__device__ void determineRange(unsigned int* sortedMortonCode, int numObjects, int idx, int* first, int* last){
+    int d = sign(clzMorton(sortedMortonCode, numObjects, idx, idx + 1) - clzMorton(sortedMortonCode, numObjects, idx, idx - 1));
+    int dMin = clzMorton(sortedMortonCode, numObjects, idx, idx - d);
     int bound = 2;
-    while(clzMorton(sortedCodeAndID, numObjects, idx, idx + d * bound) > dMin){
+    while(clzMorton(sortedMortonCode, numObjects, idx, idx + d * bound) > dMin){
         bound *= 2;
     }
     int boundAnother = 0;
     for(int t = bound / 2; t >= 1; t /= 2){
-        if(clzMorton(sortedCodeAndID, numObjects, idx, idx + (boundAnother + t) * d) > dMin){
+        if(clzMorton(sortedMortonCode, numObjects, idx, idx + (boundAnother + t) * d) > dMin){
             boundAnother = boundAnother + t;
         }
     }
@@ -159,62 +159,90 @@ __host__ __device__ void determineRange(sorted* sortedCodeAndID, int numObjects,
     }
 }
 
-__host__ __device__ Node* generateHierarchy( BBox*      box,
-                         sorted*       sortedCodeAndID,
-                         int           numObjects)
-{
-    LeafNode* leafNodes = new LeafNode[numObjects];
-    InternalNode* internalNodes = new InternalNode[numObjects - 1];
+__global__ void allocateOnDevice(LeafNode** leafNodes, InternalNode** internalNodes, int numObjects, Node** root){
+	*leafNodes = new LeafNode[numObjects];
+    *internalNodes = new InternalNode[numObjects - 1];
+    *root = &(*internalNodes)[0];
+}
 
-    // Construct leaf nodes.
-    // Note: This step can be avoided by storing
-    // the tree in a slightly different way.
+__global__ void assignLeafNodes(LeafNode** leafNodes, int* sortedObjectID, BBox* box,int numObjects){  
+    int idx = threadIdx.x + blockDim.x * blockIdx.x;
+    LeafNode* leafNodesPtr = *leafNodes;
+    if(idx < numObjects){
+        leafNodesPtr[idx].index = sortedObjectID[idx];
+        leafNodesPtr[idx].box = box[sortedObjectID[idx]];
+    }
+}
 
-    for (int idx = 0; idx < numObjects; idx++){     // in parallel
-        leafNodes[idx].index = sortedCodeAndID[idx].sortedObjectID;
-        leafNodes[idx].box = box[sortedCodeAndID[idx].sortedObjectID];
-    } 
-        
-
-    // Construct internal nodes.
-
-    for (int idx = 0; idx < numObjects - 1; idx++) // in parallel
-    {
+__global__ void assignInternalNodes(LeafNode** leafNodes, InternalNode** internalNodes, unsigned int* sortedMortonCode, int* sortedObjectID, int numObjects){
+    int idx = threadIdx.x + blockDim.x * blockIdx.x;
+    LeafNode* leafNodesPtr = *leafNodes;
+    InternalNode* internalNodesPtr = *internalNodes;
+    if(idx < numObjects){
         // Find out which range of objects the node corresponds to.
         // (This is where the magic happens!)
         int first, last;
-        determineRange(sortedCodeAndID, numObjects, idx, &first, &last);
+        determineRange(sortedMortonCode, numObjects, idx, &first, &last);
         // Determine where to split the range.
 
-        int split = findSplit(sortedCodeAndID, first, last);
+        int split = findSplit(sortedMortonCode, first, last);
 
         // Select childA.
 
         Node* childA;
         if (split == first)
-            childA = &leafNodes[split];
+            childA = &(leafNodesPtr[split]);
         else
-            childA = &internalNodes[split];
+            childA = &(internalNodesPtr[split]);
 
         // Select childB.
 
         Node* childB;
         if (split + 1 == last)
-            childB = &leafNodes[split + 1];
+            childB = &(leafNodesPtr[split + 1]);
         else
-            childB = &internalNodes[split + 1];
+            childB = &(internalNodesPtr[split + 1]);
 
         // Record parent-child relationships.
 
-        internalNodes[idx].leftChild = childA;
-        internalNodes[idx].rightChild = childB;
-        internalNodes[idx].box = leafNodes[first].box; 
+        internalNodesPtr[idx].leftChild = childA;
+        internalNodesPtr[idx].rightChild = childB;
+        internalNodesPtr[idx].box = leafNodesPtr[first].box; 
         for(int i = first + 1; i <= last; ++i){
-            internalNodes[idx].box = box_merge(internalNodes[idx].box, leafNodes[i].box);
+            internalNodesPtr[idx].box = box_merge(internalNodesPtr[idx].box, leafNodesPtr[i].box);
         }
     }
-
-    // Node 0 is the root.
-    return &internalNodes[0];
 }
+
+__global__ void debug(Node** root){
+    printf("%.6f", (*root)->getNodeBox()->max.x);
+    printf("%.6f", (*root)->getNodeBox()->max.y);
+    printf("%.6f", (*root)->getNodeBox()->max.z);
+    printf("%.6f", (*root)->getNodeBox()->min.x);
+    printf("%.6f", (*root)->getNodeBox()->min.y);
+    printf("%.6f", (*root)->getNodeBox()->min.z);
+}
+
+__host__ void generateHierarchy( BBox*      box,
+                         unsigned int* sortedMortonCode, 
+                         int*          sortedObjectID,
+                         int           numObjects,
+                         Node**        root)
+{
+    LeafNode** leafNodes;
+    InternalNode** internalNodes;
+    cudaMalloc((void **)&leafNodes, sizeof(LeafNode*));
+    cudaMalloc((void **)&internalNodes, sizeof(InternalNode*));
+    allocateOnDevice<<<1, 1>>>(leafNodes, internalNodes, numObjects, root);
+    cudaDeviceSynchronize();
+    // Construct leaf nodes.
+    // Note: This step can be avoided by storing
+    // the tree in a slightly different way.
+    assignLeafNodes<<<(numObjects + 1023) / 1024, 1024>>>(leafNodes, sortedObjectID, box, numObjects);   
+    cudaDeviceSynchronize();
+    // Construct internal nodes.
+    assignInternalNodes<<<(numObjects - 1 + 1023) / 1024, 1024>>>(leafNodes, internalNodes, sortedMortonCode, sortedObjectID, numObjects - 1);
+    // cudaDeviceSynchronize();
+}
+
 
