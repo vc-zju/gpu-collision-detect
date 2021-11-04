@@ -106,10 +106,10 @@ int compare(const void* a, const void* b){
 	return ((sorted*)a)->sortedMortonCode - ((sorted*)b)->sortedMortonCode;
 }
 
-__global__ void calclulateMorton3D(vec3f* gravityPoints, int fNum, unsigned int* sortedMortonCode, int* sortedObjectID){
+__global__ void calclulateMorton3D(vec3f* gravityPoints, int fNum, unsigned int* sortedMortonCode, int* sortedObjectID, const vec3f min, const vec3f extend){
 	int i = threadIdx.x + blockIdx.x * blockDim.x;
 	if(i < fNum){
-		sortedMortonCode[i] = morton3D(gravityPoints[i].x, gravityPoints[i].y, gravityPoints[i].z);
+		sortedMortonCode[i] = morton3D((gravityPoints[i].x - min.x) / extend.x, (gravityPoints[i].y - min.y) / extend.y, (gravityPoints[i].z - min.z) / extend.z);
 		sortedObjectID[i] = i;
 	}
 }
@@ -123,7 +123,7 @@ void buildBVH(triFace* faces, triFace* facesGPU, const int& fNum, const vec3f& m
     int* sortedObjectID;
 	cudaMalloc((void**)&(sortedMortonCode), fNum * sizeof(unsigned int));
 	cudaMalloc((void**)&(sortedObjectID), fNum * sizeof(int));
-	calclulateMorton3D<<<(fNum + 1023) / 1024, 1024>>>(facesGPU->gravityPoints, fNum, sortedMortonCode, sortedObjectID);
+	calclulateMorton3D<<<(fNum + 1023) / 1024, 1024>>>(facesGPU->gravityPoints, fNum, sortedMortonCode, sortedObjectID, min, extend);
 	cudaThreadSynchronize();
 	// cudaMemcpy(sortedCodeAndID, sortedCodeAndIDGPU, fNum * sizeof(sorted), cudaMemcpyDeviceToHost);
 	thrust::device_ptr<unsigned int> dev_key_ptr(sortedMortonCode);
@@ -139,30 +139,81 @@ void buildBVH(triFace* faces, triFace* facesGPU, const int& fNum, const vec3f& m
 	cudaFree(sortedObjectID);
 }
 
-__device__ void traverseBVHGPU(vec3f* points1, vec3f* points2, vec3f* points3, BBox* bbox, const int& queryNum, Node** root){
+__device__ void traverseBVHGPU(vec3f* points1, vec3f* points2, vec3f* points3, BBox* bbox, const int& queryNum, Node* rootPtr){
 	const BBox& box = bbox[queryNum];
-	Node* rootPtr = *root;
 	if(box_contact(box, *(rootPtr->getNodeBox()))){
 		if(rootPtr->isLeaf()){
 			int index = rootPtr->getIndex();
 			if(queryNum < index && tri_contact(points1[queryNum], points2[queryNum], points3[queryNum], 
 						   points1[index], points2[index], points3[index])){
-				printf("%d %d\n", queryNum, index);
+				// printf("%d %d\n", queryNum, index);
 			}
 		}
 		else{
 			Node* leftChild = rootPtr->leftChild;
 			Node* rightChild = rootPtr->rightChild;
-			traverseBVHGPU(points1, points2, points3, bbox, queryNum, &leftChild);
-			traverseBVHGPU(points1, points2, points3, bbox, queryNum, &rightChild);
+			traverseBVHGPU(points1, points2, points3, bbox, queryNum, leftChild);
+			traverseBVHGPU(points1, points2, points3, bbox, queryNum, rightChild);
 		}
 	}
 }
 
+__device__ void traverseIterativeBVHGPU( vec3f* points1, vec3f* points2, vec3f* points3, BBox* bbox, const int& queryNum, Node* root)
+{
+    // Allocate traversal stack from thread-local memory,
+    // and push NULL to indicate that there are no postponed nodes.
+    Node* stack[80];
+    Node** stackPtr = stack;
+    *stackPtr++ = NULL; // push
+
+    // Traverse nodes starting from the root.
+    do
+    {
+        // Check each child node for overlap.
+        Node* childL = root->leftChild;
+        Node* childR = root->rightChild;
+        bool overlapL = ( box_contact(bbox[queryNum], *(childL->getNodeBox())));
+        bool overlapR = ( box_contact(bbox[queryNum], *(childR->getNodeBox())));
+
+        // Query overlaps a leaf node => report collision.
+        if (overlapL && childL->isLeaf()){
+			int index = childL->getIndex();
+			if(queryNum < index && tri_contact(points1[queryNum], points2[queryNum], points3[queryNum], 
+						   points1[index], points2[index], points3[index])){
+				printf("%d %d\n", queryNum, childL->getIndex());
+			}
+		}
+
+        if (overlapR && childR->isLeaf()){
+			int index = childR->getIndex();
+
+			if(queryNum < index && tri_contact(points1[queryNum], points2[queryNum], points3[queryNum], 
+						   points1[index], points2[index], points3[index])){
+				printf("%d %d\n", queryNum, childR->getIndex());
+			}
+		}
+        // Query overlaps an internal node => traverse.
+        bool traverseL = (overlapL && !childL->isLeaf());
+        bool traverseR = (overlapR && !childR->isLeaf());
+
+        if (!traverseL && !traverseR)
+            root = *--stackPtr; // pop
+        else
+        {
+            root = (traverseL) ? childL : childR;
+            if (traverseL && traverseR)
+                *stackPtr++ = childR; // push
+        }
+    }
+    while (root != NULL);
+}
+
 __global__ void traverseBVH(vec3f* points1, vec3f* points2, vec3f* points3, BBox* box, Node** root, int fNum){
 	int i = threadIdx.x + blockIdx.x * blockDim.x;
+	Node* rootPrt = *root;
 	if(i < fNum){
-		traverseBVHGPU(points1, points2, points3, box, i, root);
+		// traverseBVHGPU(points1, points2, points3, box, i, rootPrt);
+		traverseIterativeBVHGPU(points1, points2, points3, box, i, rootPrt);
 	}
 }
 
@@ -214,11 +265,6 @@ int main(){
 	start = clock();
 	traverseBVH<<<(fNum + 511) / 512, 512>>>(facesGPU->points1, facesGPU->points2, facesGPU->points3, facesGPU->box, root, fNum);
 	cudaDeviceSynchronize();
-	cudaError_t cudaStatus = cudaGetLastError();
-    if (cudaStatus != cudaSuccess) 
-    {
-        printf("addKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
-    }
 	end = clock();
 	printf("traverse time=%fms\n",(double)(end-start) * 1000 /CLK_TCK);
 	cudaFree(facesGPU->points1);
@@ -229,32 +275,6 @@ int main(){
 	delete facesGPU;
 	freeOnDevice<<<1, 1>>>(root);
 	cudaFree(root);
-	/*vec3f point11, point12, point13, point21, point22, point23;
-	int collisionNum = 0;
-	for(int i = 120914; i < fNum; ++i){
-		for(int j = i + 1; j < fNum; ++j){
-			point11 = faces->points1[i];
-			point12 = faces->points2[i];
-			point13 = faces->points3[i];
-			point21 = faces->points1[j];
-			point22 = faces->points2[j];
-			point23 = faces->points3[j];
-			if(tri_contact(point11, point12, point13, point21, point22, point23)){
-				if(!(point11.equal_abs(point21) || point11.equal_abs(point22) || point11.equal_abs(point23) ||\
-				     point12.equal_abs(point21) || point12.equal_abs(point22) || point12.equal_abs(point23) ||\
-					 point13.equal_abs(point21) || point13.equal_abs(point22) || point13.equal_abs(point23))){
-					++collisionNum;
-					cout << "#self contact found at (" << i << "," << j << ")" << endl;
-					cout << point11 << endl;
-					cout << point12 << endl;
-					cout << point13 << endl;
-					cout << point21 << endl;
-					cout << point22 << endl;
-					cout << point23 << endl;
-				}	
-			}
-		}
-	}*/
 	delete[] faces->points1;
 	delete[] faces->points2;
 	delete[] faces->points3;

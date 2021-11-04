@@ -135,6 +135,57 @@ void traverseBVH(triFace* faces, const int& queryNum, Node* root){
 	}
 }
 
+ void traverseIterative( triFace* faces, const int& queryNum, Node* root)
+{
+    // Allocate traversal stack from thread-local memory,
+    // and push NULL to indicate that there are no postponed nodes.
+    Node* stack[80];
+    Node** stackPtr = stack;
+    *stackPtr++ = NULL; // push
+
+    // Traverse nodes starting from the root.
+    do
+    {
+        // Check each child node for overlap.
+        Node* childL = root->leftChild;
+        Node* childR = root->rightChild;
+        bool overlapL = ( box_contact(faces->box[queryNum], *(childL->getNodeBox())));
+        bool overlapR = ( box_contact(faces->box[queryNum], *(childR->getNodeBox())));
+
+        // Query overlaps a leaf node => report collision.
+        if (overlapL && childL->isLeaf()){
+			int index = childL->getIndex();
+			// cout << queryNum << " " << index << endl;
+			if(queryNum < index && tri_contact(faces->points1[queryNum], faces->points2[queryNum], faces->points3[queryNum], 
+						   faces->points1[index], faces->points2[index], faces->points3[index])){
+				printf("%d %d\n", queryNum, childL->getIndex());
+			}
+		}
+
+        if (overlapR && childR->isLeaf()){
+			int index = childR->getIndex();
+			// cout << queryNum << " " << index << endl;
+			if(queryNum < index && tri_contact(faces->points1[queryNum], faces->points2[queryNum], faces->points3[queryNum], 
+						   faces->points1[index], faces->points2[index], faces->points3[index])){
+				printf("%d %d\n", queryNum, childR->getIndex());
+			}
+		}
+        // Query overlaps an internal node => traverse.
+        bool traverseL = (overlapL && !childL->isLeaf());
+        bool traverseR = (overlapR && !childR->isLeaf());
+
+        if (!traverseL && !traverseR)
+            root = *--stackPtr; // pop
+        else
+        {
+            root = (traverseL) ? childL : childR;
+            if (traverseL && traverseR)
+                *stackPtr++ = childR; // push
+        }
+    }
+    while (root != NULL);
+}
+
 int main(){
 	int vNum, fNum;
 	clock_t start, end;
@@ -157,7 +208,8 @@ int main(){
 	start = clock();
 	#pragma omp parallel for
 	for(int i = 0; i < fNum; ++i){
-		traverseBVH(faces, i, root);
+		traverseIterative(faces, i, root);
+		// traverseBVH(faces, i, root);
 	}
 	cout << collisionNum << endl;
 	end = clock();

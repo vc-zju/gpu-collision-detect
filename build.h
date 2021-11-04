@@ -61,17 +61,13 @@ int findSplit( sorted*       sortedCodeAndID,
 
     // Calculate the number of highest bits that are the same
     // for all objects, using the count-leading-zeros intrinsic.
-
-    //int commonPrefix = __clz(firstCode ^ lastCode);
     int commonPrefix = clz(firstCode ^ lastCode);
-
+    
     // Use binary search to find where the next bit differs.
     // Specifically, we are looking for the highest object that
     // shares more than commonPrefix bits with the first one.
-
     int split = first; // initial guess
     int step = last - first;
-
     do
     {
         step = (step + 1) >> 1; // exponential decrease
@@ -86,7 +82,6 @@ int findSplit( sorted*       sortedCodeAndID,
         }
     }
     while (step > 1);
-
     return split;
 }
 
@@ -190,17 +185,17 @@ Node* generateHierarchy( triFace*      faces,
 
         Node* childA;
         if (split == first)
-            childA = &leafNodes[split];
+            childA = &(leafNodes[split]);
         else
-            childA = &internalNodes[split];
+            childA = &(internalNodes[split]);
 
         // Select childB.
 
         Node* childB;
         if (split + 1 == last)
-            childB = &leafNodes[split + 1];
+            childB = &(leafNodes[split + 1]);
         else
-            childB = &internalNodes[split + 1];
+            childB = &(internalNodes[split + 1]);
 
         // Record parent-child relationships.
 

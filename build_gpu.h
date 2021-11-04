@@ -124,7 +124,7 @@ __host__ __device__ inline int sign(int num){
 }
 
 __device__ inline int clzMorton(unsigned int* sortedMortonCode, int numObjects, int idx1, int idx2){
-    if(idx2 >= 0 && idx2 <= numObjects - 1){
+    if((idx2 >= 0) && (idx2 <= numObjects - 1)){
         if(((sortedMortonCode[idx1]) ^ (sortedMortonCode[idx2])) == 0){
             return (32 + __clz(idx1 ^ idx2));
         }
@@ -178,7 +178,7 @@ __global__ void assignInternalNodes(LeafNode** leafNodes, InternalNode** interna
     int idx = threadIdx.x + blockDim.x * blockIdx.x;
     LeafNode* leafNodesPtr = *leafNodes;
     InternalNode* internalNodesPtr = *internalNodes;
-    if(idx < numObjects){
+    if(idx < numObjects - 1){
         // Find out which range of objects the node corresponds to.
         // (This is where the magic happens!)
         int first, last;
@@ -198,8 +198,9 @@ __global__ void assignInternalNodes(LeafNode** leafNodes, InternalNode** interna
         // Select childB.
 
         Node* childB;
-        if (split + 1 == last)
+        if (split + 1 == last){
             childB = &(leafNodesPtr[split + 1]);
+        }
         else
             childB = &(internalNodesPtr[split + 1]);
 
@@ -234,15 +235,13 @@ __host__ void generateHierarchy( BBox*      box,
     cudaMalloc((void **)&leafNodes, sizeof(LeafNode*));
     cudaMalloc((void **)&internalNodes, sizeof(InternalNode*));
     allocateOnDevice<<<1, 1>>>(leafNodes, internalNodes, numObjects, root);
-    cudaDeviceSynchronize();
     // Construct leaf nodes.
     // Note: This step can be avoided by storing
     // the tree in a slightly different way.
     assignLeafNodes<<<(numObjects + 1023) / 1024, 1024>>>(leafNodes, sortedObjectID, box, numObjects);   
-    cudaDeviceSynchronize();
     // Construct internal nodes.
-    assignInternalNodes<<<(numObjects - 1 + 1023) / 1024, 1024>>>(leafNodes, internalNodes, sortedMortonCode, sortedObjectID, numObjects - 1);
-    // cudaDeviceSynchronize();
+    assignInternalNodes<<<(numObjects + 1023) / 1024, 1024>>>(leafNodes, internalNodes, sortedMortonCode, sortedObjectID, numObjects);
+    cudaDeviceSynchronize();
 }
 
 
